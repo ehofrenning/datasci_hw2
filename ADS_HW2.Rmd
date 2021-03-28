@@ -1,0 +1,158 @@
+---
+title: "ADS_HW2"
+author: "Ekaterina Hofrenning"
+date: "3/28/2021"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    df_print: paged
+    code_download: true
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message=FALSE, warning=FALSE)
+```
+
+
+```{r libraries}
+# SEE modeldata package for new datasets
+library(tidyverse)         # for graphing and data cleaning
+library(tidymodels)        # for modeling
+library(stacks)            # for stacking models
+library(naniar)            # for examining missing values (NAs)
+library(lubridate)         # for date manipulation
+library(moderndive)        # for King County housing data
+library(vip)               # for variable importance plots
+library(DALEX)             # for model interpretation  
+library(DALEXtra)          # for extension of DALEX
+library(patchwork)         # for combining plots nicely
+theme_set(theme_minimal()) # Lisa's favorite theme
+```
+
+```{r data}
+data("lending_club")
+# Data dictionary (as close as I could find): https://www.kaggle.com/wordsforthewise/lending-club/discussion/170691
+```
+
+
+**HW 2 GitHub link** : https://github.com/ehofrenning/datasci_hw2
+
+
+\
+
+
+## Modeling
+
+*1. Explore the data, concentrating on examining distributions of variables and examining missing values.*
+
+```{r}
+data(lending_club)
+lending_club
+```
+
+
+I first explore some main predictors via visualizations to examine the distributions:
+
+```{r}
+ggplot(lending_club, aes(x = funded_amnt)) +
+  geom_density() +
+  labs(title = "Funded Amount distribution") +
+  xlab("Funded amount")
+
+ggplot(lending_club, aes(x = int_rate)) +
+  geom_histogram(bins = 40) +
+  labs(title = "Interest rate distribution") +
+  xlab("Interest rate")
+
+ggplot(lending_club, aes(x = annual_inc)) +
+  geom_histogram(bins = 150) +
+  labs(title = "Annual income distribution") +
+  xlab("Annual income")
+
+# There are many more "good" loans than "bad"...:
+ggplot(lending_club, aes(x = Class)) +
+  geom_bar()
+```
+
+
+Here, I explore certain variables that I think may be all missing:
+
+```{r}
+lending_club %>%
+  filter(acc_now_delinq == 1)
+
+# THIS variable is all 0
+lending_club %>%
+  filter(delinq_amnt == 1)
+
+```
+
+From the above data exploration, I learned that I need to take out the *delinq_amnt* variable because all observations have a 0. 
+
+*Do any data cleaning steps that need to happen before the model is build. For example, you might remove any variables that mean the same thing as the response variable (not sure if that happens here), get rid of rows where all variables have missing values, etc.*
+
+```{r}
+# Getting rid of delinq_amnt
+lending <-
+lending_club %>%
+  select(-delinq_amnt)
+```
+
+
+```{r}
+#Be sure to add more “bad” Classes. This is not the best solution, but it will work for now. (Should investigate how to appropriately use step_sample_up() function from themis).
+
+create_more_bad <- lending %>% 
+  filter(Class == "bad") %>% 
+  sample_n(size = 3000, replace = TRUE)
+
+lending_club_mod <- lending %>% 
+  bind_rows(create_more_bad)
+```
+
+
+*3. Split the data into training and test, putting 75% in the training data.*
+
+```{r}
+set.seed(494) # for reproducibility
+
+# split the data
+lending_split <- initial_split(lending_club_mod, prop = .75, strata = Class)
+
+# make training/test sets
+lending_training <- training(lending_split)
+lending_testing <- testing(lending_split)
+```
+
+
+*4. Set up the recipe and the pre-processing steps to build a lasso model. Some steps you should take:*
+Make all integer variables numeric (I’d highly recommend using step_mutate_at() or this will be a lot of code). We’ll want to do this for the model interpretation we’ll do later.
+Think about grouping factor variables with many levels.
+Make categorical variables dummy variables (make sure NOT to do this to the outcome variable).
+Normalize quantitative variables.
+
+```{r}
+# make integers into numeric
+lending_training[12:21] <- lapply(lending_training[12:21], as.numeric)
+lending_training[9:10] <- lapply(lending_training[9:10], as.numeric)
+lending_training[1] <- lapply(lending_training[1], as.numeric)
+
+# make categorical into dummy
+lending_recipe <- recipe(Class ~ ., data = lending_training) %>%
+  step_normalize(all_numeric()) %>%   # normalize quant vars
+  step_dummy(all_nominal(), -all_outcomes())   # make categorical vars into dummy EXCEPT for outcome
+
+# check to see that this all worked
+prep(lending_recipe) %>%
+  juice() %>%
+  head()
+```
+
+
+
+
+
+
+
+
