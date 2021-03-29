@@ -85,7 +85,6 @@ lending_club %>%
 # THIS variable is all 0
 lending_club %>%
   filter(delinq_amnt == 1)
-
 ```
 
 From the above data exploration, I learned that I need to take out the *delinq_amnt* variable because all observations have a 0. 
@@ -102,6 +101,8 @@ lending_club %>%
 
 ```{r}
 #Be sure to add more “bad” Classes. This is not the best solution, but it will work for now. (Should investigate how to appropriately use step_sample_up() function from themis).
+
+# in an ideal world, we would want to upsample training data and apply it to untouched testing data... but this is fine.
 
 create_more_bad <- lending %>% 
   filter(Class == "bad") %>% 
@@ -133,12 +134,12 @@ Make categorical variables dummy variables (make sure NOT to do this to the outc
 Normalize quantitative variables.
 
 ```{r}
-# make integers into numeric
+# Make integers into numeric
 lending_training[12:21] <- lapply(lending_training[12:21], as.numeric)
 lending_training[9:10] <- lapply(lending_training[9:10], as.numeric)
 lending_training[1] <- lapply(lending_training[1], as.numeric)
 
-# make categorical into dummy
+# Other pre-processing steps:
 lending_recipe <- recipe(Class ~ ., data = lending_training) %>%
   step_normalize(all_numeric()) %>%   # normalize quant vars
   step_dummy(all_nominal(), -all_outcomes())   # make categorical vars into dummy EXCEPT for outcome
@@ -150,9 +151,142 @@ prep(lending_recipe) %>%
 ```
 
 
+*5. Set up the lasso model and workflow. We will tune the penalty parameter.*
+
+```{r}
+# define lasso model
+lending_lasso <- 
+  logistic_reg(mixture = 1) %>%   # 1 indicates lasso
+  set_engine("glmnet") %>%
+  set_args(penalty = tune()) %>%   #we'll tune the lambda later
+  set_mode("classification")
+```
+
+```{r}
+# define LASSO workflow
+lasso_wf <-
+  workflow() %>%
+  add_recipe(lending_recipe) %>%   #the processed data
+  add_model(lending_lasso)     #the general lasso model
+lasso_wf
+```
+
+
+*6. Set up the model tuning for the penalty parameter. Be sure to add the control_stack_grid() for the control argument so we can use these results later when we stack. Find the accuracy and area under the roc curve for the model with the best tuning parameter. Use 5-fold cv.*
+
+```{r}
+# 5-fold cv 
+lending_cv <- vfold_cv(lending_training, v = 5)
+
+# create penalty grid 
+penalty_grid <- grid_regular(penalty(), levels = 10)
+
+# create control grid (this we need for stacking i think)
+ctrl_grid <- control_stack_grid()
+```
+
+```{r}
+lending_lasso_tune <- 
+  lasso_wf %>%
+  tune_grid(resamples = lending_cv,
+            grid = penalty_grid,
+            control = ctrl_grid)
+
+#choose best penalty
+best_param <- lending_lasso_tune %>% 
+  select_best(metric = "accuracy")
+
+# finalize workflow
+lending_lasso_final_wf <- lasso_wf %>% 
+  finalize_workflow(best_param)
+
+# fit final model with the best lambda
+lending_lasso_final_mod <- lending_lasso_final_wf %>% 
+  fit(data = lending_training)
+```
+
+```{r}
+# average accuracy
+lending_lasso_tune %>%
+  collect_metrics() %>%
+  filter(.metric == "accuracy") %>%
+  summarise(mean_accuracy = mean(mean))
+```
+
+Now, I do the same thing but using the area under the ROC curve as the metric:
+```{r}
+# SAME THING BUT FOR ROC AUC
+
+#best param
+best_param2 <- lending_lasso_tune %>% 
+  select_best(metric = "roc_auc")
+
+# finalize workflow
+lending_lasso_final_wf2 <- lasso_wf %>% 
+  finalize_workflow(best_param2)
+
+# fit final model with the best lambda
+lending_lasso_final_mod2 <- lending_lasso_final_wf %>% 
+  fit(data = lending_training)
+
+# average roc_auc
+lending_lasso_tune %>%
+  collect_metrics() %>%
+  filter(.metric == "roc_auc") %>%
+  summarise(roc_auc = mean(mean))
+```
+
+
+```{r}
+# predicting
+# preds <- predict(lending_lasso_final_mod, lending_testing)
+# preds
+
+# add the predictions from the model onto the testing data
+# test <-
+lending_testing %>% 
+  bind_cols(predict(lending_lasso_final_mod,
+                    lending_testing, type = "prob")) %>%
+    bind_cols(predict(lending_lasso_final_mod,
+                    lending_testing)) 
+test
+```
+
+
+
+*7. Set up the recipe and the pre-processing steps to build a random forest model. You shouldn’t have to do as many steps. The only step you should need to do is making all integers numeric*
 
 
 
 
+*8. Set up the random forest model and workflow. We will tune the mtry and min_n parameters and set the number of trees, trees, to 100 (otherwise the next steps take too long).*
 
+
+
+*9. Set up the model tuning for both the mtry and min_n parameters. Be sure to add the control_stack_grid() for the control argument so we can use these results later when we stack. Use only 3 levels in the grid. For the mtry parameter, you need to put finalize(mtry(), lending_training %>% select(-Class)) in as an argument instead of just mtry(), where lending_training is the name of your training data. This is because the mtry() grid will otherwise have unknowns in it. This part can take a while to run.*
+
+
+
+*10. Find the best tuning parameters. What is the are the accuracy and area under the ROC curve for the model with those tuning parameters?*
+
+
+*11. Use functions from the DALEX and DALEXtra libraries to create a histogram and boxplot of the residuals from the training data. How do they look? Any interesting behavior?*
+
+
+*12. Use DALEX functions to create a variable importance plot from this model. What are the most important variables?*
+
+
+*13. Write a function called cp_profile to make a CP profile. The function will take an explainer, a new observation, and a variable name as its arguments and create a CP profile for a quantitative predictor variable. You will need to use the predict_profile() function inside the function you create - put the variable name there so the plotting part is easier. You’ll also want to use aes_string() rather than aes() and quote the variables. Use the cp_profile() function to create one CP profile of your choosing. Be sure to choose a variable that is numeric, not integer. There seem to be issues with those that I’m looking into.*
+
+
+*14. Use DALEX functions to create partial dependence plots (with the CP profiles in gray) for the 3-4 most important variables. If the important variables are categorical, you can instead make a CP profile for 3 observations in the dataset and discuss how you could go about constructing a partial dependence plot for a categorical variable (you don’t have to code it, but you can if you want an extra challenge). If it ever gives you an error that says, “Error: Can’t convert from VARIABLE to VARIABLE due to loss of precision”, then remove that variable from the list. I seem to have figured out why it’s doing that, but I don’t know how to fix it yet.*
+
+
+*15. Fit one more model type of your choosing that will feed into the stacking model.*
+
+
+*16. Create a model stack with the candidate models from the previous parts of the exercise and use the blend_predictions() function to find the coefficients of the stacked model. Create a plot examining the performance metrics for the different penalty parameters to assure you have captured the best one. If not, adjust the penalty. (HINT: use the autoplot() function). Which models are contributing most?*
+
+
+*17. Fit the final stacked model using fit_members(). Apply the model to the test data and report the accuracy and area under the curve. Create a graph of the ROC and construct a confusion matrix. Comment on what you see. Save this final model using the saveRDS() function - see the Use the model section of the tidymodels intro. We are going to use the model in the next part. You’ll want to save it in the folder where you create your shiny app.*
 
