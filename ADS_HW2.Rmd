@@ -48,7 +48,7 @@ data("lending_club")
 
 ```{r}
 data(lending_club)
-lending_club
+head(lending_club)
 ```
 
 
@@ -87,10 +87,11 @@ lending_club %>%
   filter(delinq_amnt == 1)
 ```
 
-From the above data exploration, I learned that I need to take out the *delinq_amnt* variable because all observations have a 0. 
+From the above data exploration, I learned that I need to take out the *delinq_amnt* variable because all observations have a 0 (0 variance vector). I am chosing to leave in the other predictors at the moment, because I believe that we could theoretically have all this information in the real world when running a model like this.
 
 *Do any data cleaning steps that need to happen before the model is build. For example, you might remove any variables that mean the same thing as the response variable (not sure if that happens here), get rid of rows where all variables have missing values, etc.*
 
+First, I omit the 0 variance predictors:
 ```{r}
 # Getting rid of delinq_amnt
 lending <-
@@ -98,7 +99,7 @@ lending_club %>%
   select(-delinq_amnt)
 ```
 
-
+Then, I upsample the "bad" classes because they are hugely underrepresented in the data. See comments for further clarification.: 
 ```{r}
 #Be sure to add more “bad” Classes. This is not the best solution, but it will work for now. (Should investigate how to appropriately use step_sample_up() function from themis).
 
@@ -128,6 +129,7 @@ lending_testing <- testing(lending_split)
 
 
 *4. Set up the recipe and the pre-processing steps to build a lasso model. Some steps you should take:*
+
 Make all integer variables numeric (I’d highly recommend using step_mutate_at() or this will be a lot of code). We’ll want to do this for the model interpretation we’ll do later.
 Think about grouping factor variables with many levels.
 Make categorical variables dummy variables (make sure NOT to do this to the outcome variable).
@@ -174,6 +176,7 @@ lasso_wf
 
 *6. Set up the model tuning for the penalty parameter. Be sure to add the control_stack_grid() for the control argument so we can use these results later when we stack. Find the accuracy and area under the roc curve for the model with the best tuning parameter. Use 5-fold cv.*
 
+Creating some sets and vectors for the tuning process:
 ```{r}
 # 5-fold cv 
 lending_cv <- vfold_cv(lending_training, v = 5)
@@ -185,6 +188,8 @@ penalty_grid <- grid_regular(penalty(), levels = 10)
 ctrl_grid <- control_stack_grid()
 ```
 
+
+Tuning process for ACCURACY:
 ```{r}
 lending_lasso_tune <- 
   lasso_wf %>%
@@ -213,7 +218,7 @@ lending_lasso_tune %>%
   summarise(mean_accuracy = mean(mean))
 ```
 
-Now, I do the same thing but using the area under the ROC curve as the metric:
+Now, I do the same thing as above but tune according to ROC AUC for the metric:
 ```{r}
 # SAME THING BUT FOR ROC AUC
 
@@ -235,8 +240,7 @@ lending_lasso_tune %>%
   filter(.metric == "roc_auc") %>%
   summarise(roc_auc = mean(mean))
 ```
-
-
+GET RIDE OF BELOW: 
 ```{r}
 # predicting
 # preds <- predict(lending_lasso_final_mod, lending_testing)
@@ -244,28 +248,93 @@ lending_lasso_tune %>%
 
 # add the predictions from the model onto the testing data
 # test <-
-lending_testing %>% 
-  bind_cols(predict(lending_lasso_final_mod,
-                    lending_testing, type = "prob")) %>%
-    bind_cols(predict(lending_lasso_final_mod,
-                    lending_testing)) 
-test
+#lending_testing %>% 
+#  bind_cols(predict(lending_lasso_final_mod,
+#                    lending_testing, type = "prob")) %>%
+#    bind_cols(predict(lending_lasso_final_mod,
+#                    lending_testing)) 
+#test
 ```
-
 
 
 *7. Set up the recipe and the pre-processing steps to build a random forest model. You shouldn’t have to do as many steps. The only step you should need to do is making all integers numeric*
 
+```{r}
+# random forest recipe
+ranger_recipe <- 
+  recipe(formula = Class ~ ., 
+         data = lending_training)
 
+ranger_recipe %>%
+  prep() %>%
+  juice()
+```
 
 
 *8. Set up the random forest model and workflow. We will tune the mtry and min_n parameters and set the number of trees, trees, to 100 (otherwise the next steps take too long).*
 
+```{r}
+# set up, leave mtry and min_n to be tuned
+ranger_spec <- 
+  rand_forest(mtry = tune(),
+              trees = 100,
+              min_n = tune()) %>% 
+  set_mode("classification") %>% 
+  set_engine("ranger")
+
+# create initial workflow
+ranger_workflow <- 
+  workflow() %>% 
+  add_recipe(ranger_recipe) %>% 
+  add_model(ranger_spec) 
+ranger_workflow
+
+ # fit the model
+library(ranger)
+
+ranger_fit <- ranger_workflow %>% 
+  fit(lending_training)
+ranger_fit
+```
 
 
 *9. Set up the model tuning for both the mtry and min_n parameters. Be sure to add the control_stack_grid() for the control argument so we can use these results later when we stack. Use only 3 levels in the grid. For the mtry parameter, you need to put finalize(mtry(), lending_training %>% select(-Class)) in as an argument instead of just mtry(), where lending_training is the name of your training data. This is because the mtry() grid will otherwise have unknowns in it. This part can take a while to run.*
 
+Tuning process:
+```{r}
+# make 5 fold cv sets
+lending_cv <- vfold_cv(lending_training, v = 5)
+# this is for stacking
+ctrl_grid <- control_stack_grid()
+```
 
+
+```{r}
+doParallel::registerDoParallel()
+
+lending_forest_tune <- 
+  ranger_workflow %>%
+  tune_grid(resamples = lending_cv,
+            grid = 20,
+            control = ctrl_grid)
+```
+
+```{r}
+# ROC auc 
+best_auc <- select_best(lending_forest_tune, "roc_auc")
+best_auc
+# Accuracy
+best_acc <-
+lending_forest_tune %>%
+  select_best("accuracy")
+best_acc
+
+# final model using best ROC AUC
+final_rf <- finalize_model(
+  ranger_spec,
+  best_auc)
+final_rf
+```
 
 *10. Find the best tuning parameters. What is the are the accuracy and area under the ROC curve for the model with those tuning parameters?*
 
