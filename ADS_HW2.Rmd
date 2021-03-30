@@ -240,21 +240,7 @@ lending_lasso_tune %>%
   filter(.metric == "roc_auc") %>%
   summarise(roc_auc = mean(mean))
 ```
-GET RIDE OF BELOW: 
-```{r}
-# predicting
-# preds <- predict(lending_lasso_final_mod, lending_testing)
-# preds
 
-# add the predictions from the model onto the testing data
-# test <-
-#lending_testing %>% 
-#  bind_cols(predict(lending_lasso_final_mod,
-#                    lending_testing, type = "prob")) %>%
-#    bind_cols(predict(lending_lasso_final_mod,
-#                    lending_testing)) 
-#test
-```
 
 
 *7. Set up the recipe and the pre-processing steps to build a random forest model. You shouldn’t have to do as many steps. The only step you should need to do is making all integers numeric*
@@ -292,9 +278,9 @@ ranger_workflow
  # fit the model
 library(ranger)
 
-ranger_fit <- ranger_workflow %>% 
-  fit(lending_training)
-ranger_fit
+#ranger_fit <- ranger_workflow %>% 
+#  fit(lending_training)
+#ranger_fit
 ```
 
 
@@ -319,10 +305,14 @@ lending_forest_tune <-
             control = ctrl_grid)
 ```
 
+
+*10. Find the best tuning parameters. What is the are the accuracy and area under the ROC curve for the model with those tuning parameters?*
+
 ```{r}
 # ROC auc 
-best_auc <- select_best(lending_forest_tune, "roc_auc")
-best_auc
+#best_auc <- select_best(lending_forest_tune, "roc_auc")
+#best_auc
+
 # Accuracy
 best_acc <-
 lending_forest_tune %>%
@@ -330,16 +320,38 @@ lending_forest_tune %>%
 best_acc
 
 # final model using best ROC AUC
-final_rf <- finalize_model(
+#final_rf <- finalize_model(
+#  ranger_spec,
+#  best_auc)
+#final_rf
+
+# final model using highest accuracy tuning parameters
+final_rf1 <- finalize_model(
   ranger_spec,
-  best_auc)
-final_rf
+  best_acc)
+final_rf1
 ```
 
-*10. Find the best tuning parameters. What is the are the accuracy and area under the ROC curve for the model with those tuning parameters?*
+```{r}
+# put the best tuned model into final workflow
+ranger_final_wf <- ranger_workflow %>% 
+  finalize_workflow(best_acc)
+ranger_final_wf
 
+# Fit model with best tuning parameter(s) to training data and apply to test data
+ranger_test <- ranger_final_wf %>% 
+  last_fit(lending_split)
+
+# get accuracy and ROC AUC for tuned model:
+ranger_test %>%
+  collect_metrics()
+```
+
+Accuracy: 0.9978220
+ROC AUC: 0.9981551	
 
 *11. Use functions from the DALEX and DALEXtra libraries to create a histogram and boxplot of the residuals from the training data. How do they look? Any interesting behavior?*
+
 
 
 *12. Use DALEX functions to create a variable importance plot from this model. What are the most important variables?*
