@@ -433,10 +433,42 @@ The loan's interest rate, open_il_12m, addr_state, term of the loan, and inq_fi 
 
 *13. Write a function called cp_profile to make a CP profile. The function will take an explainer, a new observation, and a variable name as its arguments and create a CP profile for a quantitative predictor variable. You will need to use the predict_profile() function inside the function you create - put the variable name there so the plotting part is easier. You’ll also want to use aes_string() rather than aes() and quote the variables. Use the cp_profile() function to create one CP profile of your choosing. Be sure to choose a variable that is numeric, not integer. There seem to be issues with those that I’m looking into.*
 
+```{r}
+cp_profile <- function(explainer, obs, var) {
+  predprof = predict_profile(explainer = explainer, variables = var, new_observation = obs) 
+  predprof %>% 
+    rename(yhat = `_yhat_`) %>%
+    ggplot(aes_string(x = var, y = "yhat")) +
+    geom_line()# before ggplot, after pred-prof, variable name in quote, put "y variable" 
+  } 
 
+#create observation:
+obs4 <- lending_training %>% 
+  slice(4)
+obs4
+
+# use function on lasso model to look at
+cp_profile(explainer = lasso_explain, obs4, "int_rate") # put in argument names to test
+```
+
+
+```{r}
+a <- predict_profile(lasso_explain, obs4, "int_rate")
+
+a %>% 
+  filter(`_vname_` %in% c("int_rate")) %>% 
+  ggplot(aes(x = int_rate,
+             y = `_yhat_`)) +
+  geom_line() 
+```
 
 
 *14. Use DALEX functions to create partial dependence plots (with the CP profiles in gray) for the 3-4 most important variables. If the important variables are categorical, you can instead make a CP profile for 3 observations in the dataset and discuss how you could go about constructing a partial dependence plot for a categorical variable (you don’t have to code it, but you can if you want an extra challenge). If it ever gives you an error that says, “Error: Can’t convert from VARIABLE to VARIABLE due to loss of precision”, then remove that variable from the list. I seem to have figured out why it’s doing that, but I don’t know how to fix it yet.*
+
+```{r}
+
+```
+
 
 
 *15. Fit one more model type of your choosing that will feed into the stacking model.*
