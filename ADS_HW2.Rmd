@@ -27,6 +27,7 @@ library(vip)               # for variable importance plots
 library(DALEX)             # for model interpretation  
 library(DALEXtra)          # for extension of DALEX
 library(patchwork)         # for combining plots nicely
+library(kknn)              # for KNN modeling
 theme_set(theme_minimal()) # Lisa's favorite theme
 ```
 
@@ -224,48 +225,6 @@ lending_lasso_test %>%
 best lambda = 0.005994843
 
 
-I THINK I CAN DELETE THIS BELOW:
-```{r}
-# Training data model accuracy:
-
-# Accuracy
-#lending_lasso_tune %>%
-#  collect_metrics() %>%
-#  filter(.metric == "accuracy") %>%
-#  summarise(mean_accuracy = mean(mean))
-
-# ROC AUC
-lending_lasso_tune %>%
-#  collect_metrics() %>%
-#  filter(.metric == "roc_auc") %>%
-#  summarise(roc_auc = mean(mean))
-```
-
-I THINK I CAN DELETE THIS BELOW:
-```{r}
-# SAME THING BUT FOR ROC AUC
-
-#best param
-#best_param2 <- lending_lasso_tune %>% 
-#  select_best(metric = "roc_auc")
-
-# finalize workflow
-#lending_lasso_final_wf2 <- lasso_wf %>% 
-#  finalize_workflow(best_param2)
-
-# fit final model with the best lambda
-#lending_lasso_final_mod2 <- lending_lasso_final_wf %>% 
-#  fit(data = lending_training)
-
-# average roc_auc
-#lending_lasso_tune %>%
-#  collect_metrics() %>%
-#  filter(.metric == "roc_auc") %>%
-#  summarise(roc_auc = mean(mean))
-```
-
-
-
 *7. Set up the recipe and the pre-processing steps to build a random forest model. You shouldn’t have to do as many steps. The only step you should need to do is making all integers numeric*
 
 ```{r}
@@ -310,21 +269,17 @@ library(ranger)
 *9. Set up the model tuning for both the mtry and min_n parameters. Be sure to add the control_stack_grid() for the control argument so we can use these results later when we stack. Use only 3 levels in the grid. For the mtry parameter, you need to put finalize(mtry(), lending_training %>% select(-Class)) in as an argument instead of just mtry(), where lending_training is the name of your training data. This is because the mtry() grid will otherwise have unknowns in it. This part can take a while to run.*
 
 Tuning process:
-```{r}
-# make 5 fold cv sets
-lending_cv <- vfold_cv(lending_training, v = 5)
-# this is for stacking
-ctrl_grid <- control_stack_grid()
-```
-
 
 ```{r}
 doParallel::registerDoParallel()
 
+testgrid <- finalize(mtry(), lending_training %>% select(-Class))
+
 lending_forest_tune <- 
   ranger_workflow %>%
   tune_grid(resamples = lending_cv,
-            grid = 20,
+            grid = 3,
+            mtry = testgrid,    #maybe take this out????
             control = ctrl_grid)
 ```
 
@@ -442,7 +397,7 @@ For the LASSO model: the loan's interest rate is by far the most important predi
 
 *13. Write a function called cp_profile to make a CP profile. The function will take an explainer, a new observation, and a variable name as its arguments and create a CP profile for a quantitative predictor variable. You will need to use the predict_profile() function inside the function you create - put the variable name there so the plotting part is easier. You’ll also want to use aes_string() rather than aes() and quote the variables. Use the cp_profile() function to create one CP profile of your choosing. Be sure to choose a variable that is numeric, not integer. There seem to be issues with those that I’m looking into.*
 
-First, I create a function that is fed an explainer, an observation, and the variable of interest. Then, the function creates a prediction profile using the dalex package and spits out a plot of how the predictions are affected when my variable of interest changes.
+First, I create a function that is given an explainer, an observation, and the variable of interest. Then, the function creates a prediction profile using the dalex package and spits out a plot of how the predictions are affected when my variable of interest changes.
 
 ```{r}
 # create function:
@@ -498,9 +453,66 @@ plot(rf_pdp,
 
 *15. Fit one more model type of your choosing that will feed into the stacking model.*
 
+I run a K-Nearest-Neighbors model to predict Class.
+
+```{r}
+# create a model definition
+lending_training$Class <- as.factor(lending_training$Class)
+
+#NOTE: TRY MAKING A NEW RECIPE JUST FOR KNN AND SEE IF THE STACKING ERRORS GO AWAY!
+
+df_juiced <- lending_recipe %>% prep() %>% juice()
+
+knn_mod <-
+  nearest_neighbor(
+    neighbors = tune("k")
+  ) %>%
+  set_engine("kknn") %>% 
+  set_mode("classification")
+
+# create the workflow
+knn_wf <- 
+  workflow() %>% 
+  add_model(knn_mod) %>%
+  add_recipe(lending_recipe)
+
+#metric1 <- metric_set(accuracy)
+#controlgrid <- control_grid()
+
+# tune it using 4 tuning parameters
+knn_tune <- 
+  knn_wf %>% 
+  tune_grid(
+    lending_cv,
+    grid = 4,
+    control = control_stack_grid())
+
+# best num of neighbors:
+knn_tune
+```
+
+
 
 
 *16. Create a model stack with the candidate models from the previous parts of the exercise and use the blend_predictions() function to find the coefficients of the stacked model. Create a plot examining the performance metrics for the different penalty parameters to assure you have captured the best one. If not, adjust the penalty. (HINT: use the autoplot() function). Which models are contributing most?*
+
+
+```{r}
+lending_lasso_tune
+lending_forest_tune
+knn_tune
+
+stackmod <-
+stacks() %>%
+  add_candidates(lending_lasso_tune) %>%
+  add_candidates(lending_forest_tune) %>%
+  add_candidates(knn_tune)
+
+stackmod %>%
+  blend_predictions()
+```
+
+The random forest 
 
 
 *17. Fit the final stacked model using fit_members(). Apply the model to the test data and report the accuracy and area under the curve. Create a graph of the ROC and construct a confusion matrix. Comment on what you see. Save this final model using the saveRDS() function - see the Use the model section of the tidymodels intro. We are going to use the model in the next part. You’ll want to save it in the folder where you create your shiny app.*
